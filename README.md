@@ -23,7 +23,7 @@ sync-glacier.py job_file.job
 
 On the first run, it will download an inventory of the vault. This takes about four hours, after which you'll need to run the script again. The script will upload the files in the given directory that don't already appear in the vault (or that have been updated since your last upload). Once that's done, every time you want to sync changes to your vault, simply run the script again. It'll detect what's been updated and only upload those files.
 
-
+```
 
 CREATE TABLE `tblDocs` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
@@ -33,3 +33,4 @@ CREATE TABLE `tblDocs` (
   `archivedate` int(10) DEFAULT NULL,
   PRIMARY KEY (`id`),
 ) ENGINE=InnoDB AUTO_INCREMENT=13437 DEFAULT CHARSET=latin1;
+```
