@@ -6,9 +6,18 @@ import sys
 import os
 import json
 import time
+import pymysql
 
 access_key_id = ""
 secret_key = ""
+
+db_host = ""
+db_port = 
+db_username = ""
+db_password = ""
+db_name = ""
+
+update_sql = "UPDATE `tblDocs` SET `archiveid`=%s, `archivevault`=%s, `archivedate`=%s WHERE `name`=%s"
 
 # Outputs the config file
 def write():
@@ -17,7 +26,7 @@ def write():
 		f.write('|'.join(dirs) + "\n")
 		f.write(inventory_job + "\n")
 		f.write(ls_present + "\n")
-		
+
 		for name, data in ls.iteritems():
 			f.write(name + "|" + data['id'] + '|' + str(data['last_modified'])  + '|' + str(data['size']) + "\n")
 
@@ -31,7 +40,7 @@ def format_bytes(bytes):
 			return "%3.1f %s" % (bytes, x)
 		bytes /= 1024.0
 	return "%3.1f %s" % (bytes, 'TB')
-	
+
 def format_time(num):
 	times = []
 	for x in [(60, 'second'), (60, 'minute'), (1e10, 'hour')]:
@@ -40,7 +49,7 @@ def format_time(num):
 		num /= x[0]
 	times.reverse()
 	return ', '.join(times)
-	
+
 # Make sure the user passed in a config file
 if len(sys.argv) < 2 or not os.path.exists(sys.argv[1]):
 	print "Config file not found. Pass in a file with the vault name and the directory to sync on separate lines."
@@ -52,11 +61,11 @@ with open(config, 'rU') as f:
 	vault_info = f.readline().strip().split('|')
 	vault_name = vault_info[0]
 	region = vault_info[1]
-	
+
 	dirs = f.readline().strip().split('|')
 	inventory_job = f.readline().strip()
 	ls_present = f.readline().strip()
-	
+
 	ls = {}
 	for file in f.readlines():
 		name, id, last_modified, size = file.strip().split('|')
@@ -84,9 +93,12 @@ for dir in dirs:
 connect_to_region(vault_info[1], aws_access_key_id=access_key_id, aws_secret_access_key=secret_key)
 glacier = Layer2(aws_access_key_id=access_key_id, aws_secret_access_key=secret_key, region_name=region)
 vault = glacier.get_vault(vault_name)
+# workaround for UnicodeDecodeError
+# https://github.com/boto/boto/issues/3318
+vault.name = str(vault.name)
 print "Beginning job on " + vault.arn
 
-# Ah, we don't have a vault listing yet. 
+# Ah, we don't have a vault listing yet.
 if not ls_present:
 
 	# No job yet? Initiate a job.
@@ -95,20 +107,20 @@ if not ls_present:
 		write()
 		print "Requested an inventory. This usually takes about four hours."
 		terminate(0)
-	
+
 	# We have a job, but it's not finished.
 	job = vault.get_job(inventory_job)
 	if not job.completed:
 		print "Waiting for an inventory. This usually takes about four hours."
 		terminate(0)
-	
+
 	# Finished!
 	try:
 		data = json.loads(job.get_output().read())
 	except ValueError:
 		print "Something went wrong interpreting the data Amazon sent!"
 		terminate(1)
-	
+
 	ls = {}
 	for archive in data['ArchiveList']:
 		ls[archive['ArchiveDescription']] = {
@@ -117,12 +129,20 @@ if not ls_present:
 			'size': int(archive['Size']),
 			'hash': archive['SHA256TreeHash']
 		}
-		
+
 	ls_present = '-'
 	inventory_job = ''
 	write()
 	print "Imported a new inventory from Amazon."
-	
+
+db_connection = pymysql.connect(
+	host=db_host,
+	port=db_port,
+	user=db_username,
+	password=db_password,
+	db=db_name
+)
+print "Connected to database."
 # Let's upload!
 os.stat_float_times(False)
 try:
@@ -134,27 +154,27 @@ try:
 		files = os.listdir(dir)
 		for file in files:
 			path = dir + os.sep + file
-			
+
 			# If it's a directory, then ignore it
 			if not os.path.isfile(path):
 				continue
-			
+
 			last_modified = int(os.path.getmtime(path))
 			size = os.path.getsize(path)
 			updating = False
 			if file in ls:
-			
+
 				# Has it not been modified since?
 				if ls[file]['last_modified'] >= last_modified and ls[file]['size'] == size:
 					continue
-				
+
 				# It's been changed... we should delete the old one
 				else:
 					vault.delete_archive(ls[file]['id'])
 					del ls[file]
 					updating = True
 					write()
-				
+
 			try:
 				print file + ": uploading... ",
 				id = vault.concurrent_create_archive_from_file(path, file)
@@ -163,7 +183,7 @@ try:
 					'size': size,
 					'last_modified': last_modified
 				}
-				
+
 				write()
 				i += 1
 				transferred += size
@@ -171,10 +191,23 @@ try:
 					print "updated."
 				else:
 					print "done."
+
+				print file + ": updating database info... ",
+				try:
+					with db_connection.cursor() as cursor:
+						 cursor.execute(update_sql, (id, vault.arn, int(time.time()), file))
+				except pymysql.MySQLError as exc:
+					print "error occured: " + str(exc)
+					db_connection.rollback()
+				else:
+					db_connection.commit()
+					print "done. "
+
 			except UploadArchiveError:
 				print "FAILED TO UPLOAD."
-			
+
 finally:
+	db_connection.close()
 	elapsed = time.time() - time_begin
 	print "\n" + str(i) + " files successfully uploaded."
 	print "Transferred " + format_bytes(transferred) + " in " + format_time(elapsed) + " at rate of " + format_bytes(transferred / elapsed) + "/s."
