@@ -23,6 +23,8 @@ sync-glacier.py job_file.job
 
 On the first run, it will download an inventory of the vault. This takes about four hours, after which you'll need to run the script again. The script will upload the files in the given directory that don't already appear in the vault (or that have been updated since your last upload). Once that's done, every time you want to sync changes to your vault, simply run the script again. It'll detect what's been updated and only upload those files.
 
+NOTE: This script doesn't work very well is you have your files stored in an S3 bucker mounted as a directory with s3fs.  This is because s3fs is not very good at metadata operations, like listing files and directories. The script currently loops through each file in the directory.  As a workaround in this case, you can use sync-glacier2.py, which relies on the database to get metadata instead of the filesystem.
+
 ```
 
 CREATE TABLE `tblDocs` (
